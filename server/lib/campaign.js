@@ -47,9 +47,10 @@ function extractFriendData(commentText, messageTags = []) {
     }
   }
 
-  const atMentionRegex = /@([\p{L}\p{M}\p{N}_.]+)/gu;
+  // Match @mentions including names with spaces (up to 40 chars)
+  const atMentionRegex = /@([\p{L}\p{M}\p{N}_\s.]{1,40}?)(?=$|#|https?:\/\/|[\r\n])/gu;
   const matches = [...(commentText || "").matchAll(atMentionRegex)];
-  if (matches.length > 0) {
+  if (matches.length > 0 && matches[0][1].trim().length > 0) {
     return {
       name: matches[0][1].trim(),
       id: null,
