@@ -118,7 +118,7 @@ async function generateCardImage(bgIndex, profilePicUrl, friendName) {
 
       return bgBuffer;
     } catch (err) {
-      console.warn("[ImageGen] ⚠️ Profile pic overlay warning:", err.message);
+      console.log("[ImageGen] ℹ️ Profile pic unavailable (FB API restriction for non-admin users) — using background only");
     }
   }
 
