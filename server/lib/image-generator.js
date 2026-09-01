@@ -41,7 +41,16 @@ async function generateCardImage(bgIndex, profilePicUrl, friendName) {
   // Overlay profile picture if provided
   if (profilePicUrl) {
     try {
-      const response = await axios.get(profilePicUrl, {
+      // If URL contains redirect=false, Graph API returns JSON with the real URL
+      let actualImageUrl = profilePicUrl;
+      if (profilePicUrl.includes("redirect=false")) {
+        const metaRes = await axios.get(profilePicUrl, { timeout: 5000 });
+        if (metaRes.data && metaRes.data.data && metaRes.data.data.url) {
+          actualImageUrl = metaRes.data.data.url;
+        }
+      }
+
+      const response = await axios.get(actualImageUrl, {
         responseType: "arraybuffer",
         timeout: 5000,
         maxRedirects: 5,

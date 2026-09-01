@@ -81,7 +81,7 @@ app.get("/card-image", async (req, res) => {
   const token = (process.env.FB_PAGE_ACCESS_TOKEN || "").replace(/["'\r\n\t ]/g, "").trim();
 
   const profilePicUrl = friendId
-    ? `https://graph.facebook.com/v21.0/${friendId}/picture?type=large&access_token=${token}`
+    ? `https://graph.facebook.com/v21.0/${friendId}/picture?type=large&redirect=false&access_token=${token}`
     : null;
 
   try {
