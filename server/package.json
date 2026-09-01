@@ -11,6 +11,7 @@
     "axios": "^1.20.0",
     "dotenv": "^16.4.0",
     "express": "^4.21.0",
+    "opentype.js": "^2.0.0",
     "sharp": "^0.33.5"
   },
   "engines": {

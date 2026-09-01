@@ -1,15 +1,17 @@
 // ==================================================
-// Dynamic Image Generator (Sharp + Thai Font Text Overlay)
+// Dynamic Image Generator (Sharp + Vector Path Text Overlay)
 // ==================================================
-// Generates card images with friend's name as text
-// overlay on the background card with embedded Thai font
-// for 100% accurate Thai character rendering on Linux (Render).
+// Converts Thai text into SVG vector <path> shapes using
+// opentype.js so that Thai characters render 100% accurately
+// on any OS (Linux/Render/Mac) without relying on librsvg or
+// system font availability.
 // ==================================================
 
 const fs = require("fs");
 const path = require("path");
 const axios = require("axios");
 const sharp = require("sharp");
+const opentype = require("opentype.js");
 
 const BG_IMAGES = {
   1: "https://i.ibb.co/j9y1XGDC/1.jpg",
@@ -21,37 +23,28 @@ const BG_IMAGES = {
 // In-memory cache for background image buffers
 const bgCache = new Map();
 
-// Base64-encoded Thai font for SVG rendering
-let thaiFontB64 = "";
+// Opentype font object
+let parsedFont = null;
 
 /**
- * Load or download NotoSansThai font and convert to Base64.
+ * Load or download NotoSansThai font and parse with opentype.js
  */
-async function loadThaiFont() {
-  if (thaiFontB64) return thaiFontB64;
+function getParsedFont() {
+  if (parsedFont) return parsedFont;
 
-  const assetsDir = path.join(__dirname, "..", "assets");
-  if (!fs.existsSync(assetsDir)) fs.mkdirSync(assetsDir, { recursive: true });
-  const fontPath = path.join(assetsDir, "NotoSansThai.ttf");
-
-  try {
-    if (fs.existsSync(fontPath)) {
-      const fontBuffer = fs.readFileSync(fontPath);
-      thaiFontB64 = fontBuffer.toString("base64");
-      return thaiFontB64;
-    }
-
-    // Download Thai font if not present
-    const fontUrl = "https://github.com/google/fonts/raw/main/ofl/notosansthai/NotoSansThai%5Bwdth%2Cwght%5D.ttf";
-    const res = await axios.get(fontUrl, { responseType: "arraybuffer", timeout: 10000 });
-    fs.writeFileSync(fontPath, Buffer.from(res.data));
-    thaiFontB64 = Buffer.from(res.data).toString("base64");
-    console.log("[ImageGen] ✅ Thai font loaded and cached");
-    return thaiFontB64;
-  } catch (err) {
-    console.warn("[ImageGen] ⚠️ Could not load Thai font:", err.message);
-    return "";
+  const fontPath = path.join(__dirname, "..", "assets", "NotoSansThai.ttf");
+  if (fs.existsSync(fontPath)) {
+    const fontBuffer = fs.readFileSync(fontPath);
+    parsedFont = opentype.parse(
+      fontBuffer.buffer.slice(
+        fontBuffer.byteOffset,
+        fontBuffer.byteOffset + fontBuffer.byteLength
+      )
+    );
+    console.log("[ImageGen] ✅ NotoSansThai font parsed with opentype.js");
+    return parsedFont;
   }
+  return null;
 }
 
 /**
@@ -62,7 +55,6 @@ async function loadThaiFont() {
 async function getBgBuffer(bgIndex) {
   const index = parseInt(bgIndex, 10) || 1;
 
-  // 1. Return from cache if available
   if (bgCache.has(index)) {
     return bgCache.get(index);
   }
@@ -116,15 +108,15 @@ async function getBgBuffer(bgIndex) {
  */
 async function generateCardImage(bgIndex, profilePicUrl, friendName = "Friend") {
   let bgBuffer = await getBgBuffer(bgIndex);
-  const fontB64 = await loadThaiFont();
+  const font = getParsedFont();
 
   // Get background dimensions
   const bgMeta = await sharp(bgBuffer).metadata();
   const bgWidth = bgMeta.width;
   const bgHeight = bgMeta.height;
 
-  // Create text overlay with friend's name
-  if (friendName && friendName !== "Friend") {
+  // Create vector text overlay with friend's name
+  if (friendName && friendName !== "Friend" && font) {
     try {
       const centerX = Math.round(bgWidth / 2);
       const centerY = Math.round(bgHeight * 0.40);
@@ -138,53 +130,36 @@ async function generateCardImage(bgIndex, profilePicUrl, friendName = "Friend") 
         fontSize = Math.round(bgWidth * 0.04);
       }
 
-      // Escape special XML characters in the name
-      const safeName = friendName
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&apos;");
+      // Calculate exact text width for pixel-perfect centering
+      const textWidth = font.getAdvanceWidth(friendName, fontSize);
+      const startX = Math.round((bgWidth - textWidth) / 2);
 
-      const fontStyle = fontB64
-        ? `@font-face { font-family: 'ThaiFont'; src: url('data:font/ttf;charset=utf-8;base64,${fontB64}') format('truetype'); }`
-        : "";
+      // Convert Thai text into SVG vector path data using opentype.js
+      const textPath = font.getPath(
+        friendName,
+        startX,
+        centerY + fontSize * 0.35,
+        fontSize
+      );
+      const pathData = textPath.toPathData(2);
 
-      const textSvg = `<svg width="${bgWidth}" height="${bgHeight}">
-        <defs>
-          <style>
-            ${fontStyle}
-            .name-text {
-              font-family: 'ThaiFont', Arial, Helvetica, sans-serif;
-              font-size: ${fontSize}px;
-              font-weight: bold;
-              fill: white;
-            }
-          </style>
-          <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-            <feDropShadow dx="2" dy="2" stdDeviation="4" flood-color="rgba(0,0,0,0.7)"/>
-          </filter>
-        </defs>
-        
+      const textSvg = `<svg width="${bgWidth}" height="${bgHeight}" xmlns="http://www.w3.org/2000/svg">
         <!-- Background pill/badge behind the name -->
         <rect 
-          x="${centerX - (safeName.length * fontSize * 0.35)}" 
+          x="${centerX - textWidth / 2 - fontSize * 0.4}" 
           y="${centerY - fontSize * 0.85}" 
-          width="${safeName.length * fontSize * 0.70}" 
+          width="${textWidth + fontSize * 0.8}" 
           height="${fontSize * 1.8}" 
           rx="${fontSize * 0.4}" 
           ry="${fontSize * 0.4}" 
           fill="rgba(0,0,0,0.55)" 
         />
         
-        <!-- Friend's name text -->
-        <text 
-          x="${centerX}" 
-          y="${centerY + fontSize * 0.35}" 
-          class="name-text" 
-          text-anchor="middle" 
-          filter="url(#shadow)"
-        >${safeName}</text>
+        <!-- Vector Path for Thai Text (Drop Shadow) -->
+        <path d="${pathData}" fill="rgba(0,0,0,0.7)" transform="translate(2, 2)"/>
+        
+        <!-- Vector Path for Thai Text (White Fill) -->
+        <path d="${pathData}" fill="#FFFFFF"/>
       </svg>`;
 
       const cardBuffer = await sharp(bgBuffer)
@@ -200,7 +175,7 @@ async function generateCardImage(bgIndex, profilePicUrl, friendName = "Friend") 
 
       return cardBuffer;
     } catch (err) {
-      console.warn("[ImageGen] ⚠️ Text overlay failed:", err.message);
+      console.warn("[ImageGen] ⚠️ Vector text overlay failed:", err.message);
     }
   }
 
@@ -208,8 +183,8 @@ async function generateCardImage(bgIndex, profilePicUrl, friendName = "Friend") 
   return sharp(bgBuffer).jpeg({ quality: 90 }).toBuffer();
 }
 
-// Pre-warm cache and font on module load
-loadThaiFont().catch(() => {});
+// Pre-warm font and cache on module load
+try { getParsedFont(); } catch (_e) {}
 getBgBuffer(1).catch(() => {});
 getBgBuffer(4).catch(() => {});
 
