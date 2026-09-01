@@ -1,8 +1,9 @@
 // ==================================================
-// Dynamic Image Generator (Sharp + Text Overlay)
+// Dynamic Image Generator (Sharp + Text Overlay + Memory Cache)
 // ==================================================
 // Generates card images with friend's name as text
-// overlay on the background card.
+// overlay on the background card with in-memory caching
+// and automatic fallback for missing/slow network images.
 // ==================================================
 
 const axios = require("axios");
@@ -15,6 +16,67 @@ const BG_IMAGES = {
   4: "https://i.ibb.co/XZWHVscg/4.jpg",
 };
 
+// In-memory cache for background image buffers to prevent HTTP timeouts
+const bgCache = new Map();
+
+/**
+ * Fetch and cache background image buffer with fallback logic.
+ * @param {number|string} bgIndex 
+ * @returns {Promise<Buffer>}
+ */
+async function getBgBuffer(bgIndex) {
+  const index = parseInt(bgIndex, 10) || 1;
+
+  // 1. Return from cache if available
+  if (bgCache.has(index)) {
+    return bgCache.get(index);
+  }
+
+  const bgUrl = BG_IMAGES[index] || BG_IMAGES[1];
+
+  try {
+    const response = await axios.get(bgUrl, {
+      responseType: "arraybuffer",
+      timeout: 5000,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+      },
+    });
+
+    const buffer = Buffer.from(response.data);
+
+    // Verify it's a valid image using sharp
+    await sharp(buffer).metadata();
+
+    // Cache valid buffer
+    bgCache.set(index, buffer);
+    return buffer;
+  } catch (err) {
+    console.warn(`[ImageGen] ⚠️ Failed to load bg ${index} (${bgUrl}): ${err.message} — falling back to bg 1`);
+
+    // Fallback to cached bg 1 if available
+    if (bgCache.has(1)) {
+      return bgCache.get(1);
+    }
+
+    // Otherwise download bg 1 as guaranteed fallback
+    try {
+      const fbResponse = await axios.get(BG_IMAGES[1], {
+        responseType: "arraybuffer",
+        timeout: 5000,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+        },
+      });
+      const fbBuffer = Buffer.from(fbResponse.data);
+      bgCache.set(1, fbBuffer);
+      return fbBuffer;
+    } catch (fbErr) {
+      throw new Error(`Failed to load fallback background image: ${fbErr.message}`);
+    }
+  }
+}
+
 /**
  * Generate a dynamic card image with the friend's name overlaid as text.
  *
@@ -24,14 +86,7 @@ const BG_IMAGES = {
  * @returns {Promise<Buffer>} JPEG image buffer
  */
 async function generateCardImage(bgIndex, profilePicUrl, friendName = "Friend") {
-  const bgUrl = BG_IMAGES[bgIndex] || BG_IMAGES[1];
-
-  // Load background image
-  const bgResponse = await axios.get(bgUrl, {
-    responseType: "arraybuffer",
-    timeout: 10000,
-  });
-  let bgBuffer = Buffer.from(bgResponse.data);
+  let bgBuffer = await getBgBuffer(bgIndex);
 
   // Get background dimensions
   const bgMeta = await sharp(bgBuffer).metadata();
@@ -41,7 +96,6 @@ async function generateCardImage(bgIndex, profilePicUrl, friendName = "Friend") 
   // Create text overlay with friend's name
   if (friendName && friendName !== "Friend") {
     try {
-      // Calculate text positioning (center of the card, upper area)
       const centerX = Math.round(bgWidth / 2);
       const centerY = Math.round(bgHeight * 0.40);
 
@@ -62,18 +116,10 @@ async function generateCardImage(bgIndex, profilePicUrl, friendName = "Friend") 
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&apos;");
 
-      // Create SVG text overlay with shadow effect for readability
       const textSvg = `<svg width="${bgWidth}" height="${bgHeight}">
         <defs>
           <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
             <feDropShadow dx="2" dy="2" stdDeviation="4" flood-color="rgba(0,0,0,0.7)"/>
-          </filter>
-          <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="6" result="blur"/>
-            <feMerge>
-              <feMergeNode in="blur"/>
-              <feMergeNode in="SourceGraphic"/>
-            </feMerge>
           </filter>
         </defs>
         
@@ -101,7 +147,7 @@ async function generateCardImage(bgIndex, profilePicUrl, friendName = "Friend") 
         >${safeName}</text>
       </svg>`;
 
-      bgBuffer = await sharp(bgBuffer)
+      const cardBuffer = await sharp(bgBuffer)
         .composite([
           {
             input: Buffer.from(textSvg),
@@ -112,8 +158,7 @@ async function generateCardImage(bgIndex, profilePicUrl, friendName = "Friend") 
         .jpeg({ quality: 90 })
         .toBuffer();
 
-      console.log(`[ImageGen] ✅ Card generated with name: "${friendName}" on bg ${bgIndex}`);
-      return bgBuffer;
+      return cardBuffer;
     } catch (err) {
       console.warn("[ImageGen] ⚠️ Text overlay failed:", err.message);
     }
@@ -122,6 +167,10 @@ async function generateCardImage(bgIndex, profilePicUrl, friendName = "Friend") 
   // Return background only (no overlay)
   return sharp(bgBuffer).jpeg({ quality: 90 }).toBuffer();
 }
+
+// Pre-warm background cache on module load
+getBgBuffer(1).catch(() => {});
+getBgBuffer(4).catch(() => {});
 
 module.exports = {
   generateCardImage,
