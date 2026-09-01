@@ -1,8 +1,8 @@
 // ==================================================
-// Dynamic Image Generator (Sharp Profile Overlay)
+// Dynamic Image Generator (Sharp + Text Overlay)
 // ==================================================
-// Uses 'sharp' instead of @napi-rs/canvas for better
-// compatibility with Render.com build environment.
+// Generates card images with friend's name as text
+// overlay on the background card.
 // ==================================================
 
 const axios = require("axios");
@@ -16,14 +16,14 @@ const BG_IMAGES = {
 };
 
 /**
- * Generate a dynamic card image overlaying the friend's profile picture.
+ * Generate a dynamic card image with the friend's name overlaid as text.
  *
  * @param {number|string} bgIndex - Background image index (1-4)
- * @param {string} [profilePicUrl] - URL of tagged friend's profile photo
- * @param {string} [friendName] - Friend's name to write on image
+ * @param {string} [profilePicUrl] - (kept for API compatibility, not used)
+ * @param {string} [friendName] - Friend's name to display on the card
  * @returns {Promise<Buffer>} JPEG image buffer
  */
-async function generateCardImage(bgIndex, profilePicUrl, friendName) {
+async function generateCardImage(bgIndex, profilePicUrl, friendName = "Friend") {
   const bgUrl = BG_IMAGES[bgIndex] || BG_IMAGES[1];
 
   // Load background image
@@ -38,87 +38,84 @@ async function generateCardImage(bgIndex, profilePicUrl, friendName) {
   const bgWidth = bgMeta.width;
   const bgHeight = bgMeta.height;
 
-  // Overlay profile picture if provided
-  if (profilePicUrl) {
+  // Create text overlay with friend's name
+  if (friendName && friendName !== "Friend") {
     try {
-      // If URL contains redirect=false, Graph API returns JSON with the real URL
-      let actualImageUrl = profilePicUrl;
-      if (profilePicUrl.includes("redirect=false")) {
-        const metaRes = await axios.get(profilePicUrl, { timeout: 5000 });
-        if (metaRes.data && metaRes.data.data && metaRes.data.data.url) {
-          actualImageUrl = metaRes.data.data.url;
-        }
+      // Calculate text positioning (center of the card, upper area)
+      const centerX = Math.round(bgWidth / 2);
+      const centerY = Math.round(bgHeight * 0.40);
+
+      // Scale font size based on image width and name length
+      let fontSize = Math.round(bgWidth * 0.07);
+      if (friendName.length > 15) {
+        fontSize = Math.round(bgWidth * 0.05);
+      }
+      if (friendName.length > 25) {
+        fontSize = Math.round(bgWidth * 0.04);
       }
 
-      const response = await axios.get(actualImageUrl, {
-        responseType: "arraybuffer",
-        timeout: 5000,
-        maxRedirects: 5,
-      });
-      const avatarBuffer = Buffer.from(response.data);
+      // Escape special XML characters in the name
+      const safeName = friendName
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&apos;");
 
-      // Calculate circle position and size
-      const radius = Math.round(Math.min(bgWidth, bgHeight) * 0.16);
-      const diameter = radius * 2;
-      const centerX = Math.round(bgWidth / 2);
-      const centerY = Math.round(bgHeight * 0.42);
-
-      // Resize avatar to fit the circle
-      const resizedAvatar = await sharp(avatarBuffer)
-        .resize(diameter, diameter, { fit: "cover" })
-        .raw()
-        .toBuffer();
-
-      // Create circular mask
-      const circleSvg = `<svg width="${diameter}" height="${diameter}">
-        <circle cx="${radius}" cy="${radius}" r="${radius}" fill="white"/>
+      // Create SVG text overlay with shadow effect for readability
+      const textSvg = `<svg width="${bgWidth}" height="${bgHeight}">
+        <defs>
+          <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+            <feDropShadow dx="2" dy="2" stdDeviation="4" flood-color="rgba(0,0,0,0.7)"/>
+          </filter>
+          <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="6" result="blur"/>
+            <feMerge>
+              <feMergeNode in="blur"/>
+              <feMergeNode in="SourceGraphic"/>
+            </feMerge>
+          </filter>
+        </defs>
+        
+        <!-- Background pill/badge behind the name -->
+        <rect 
+          x="${centerX - (safeName.length * fontSize * 0.32)}" 
+          y="${centerY - fontSize * 0.8}" 
+          width="${safeName.length * fontSize * 0.64}" 
+          height="${fontSize * 1.8}" 
+          rx="${fontSize * 0.4}" 
+          ry="${fontSize * 0.4}" 
+          fill="rgba(0,0,0,0.5)" 
+        />
+        
+        <!-- Friend's name text -->
+        <text 
+          x="${centerX}" 
+          y="${centerY + fontSize * 0.35}" 
+          font-family="Arial, Helvetica, sans-serif" 
+          font-size="${fontSize}" 
+          font-weight="bold" 
+          fill="white" 
+          text-anchor="middle" 
+          filter="url(#shadow)"
+        >${safeName}</text>
       </svg>`;
 
-      // Apply circular mask to avatar
-      const circularAvatar = await sharp(resizedAvatar, {
-        raw: { width: diameter, height: diameter, channels: 3 },
-      })
-        .ensureAlpha()
-        .composite([
-          {
-            input: Buffer.from(circleSvg),
-            blend: "dest-in",
-          },
-        ])
-        .png()
-        .toBuffer();
-
-      // Create white border ring
-      const borderWidth = 10;
-      const borderDiameter = diameter + borderWidth * 2;
-      const borderRadius = borderDiameter / 2;
-      const borderSvg = `<svg width="${borderDiameter}" height="${borderDiameter}">
-        <circle cx="${borderRadius}" cy="${borderRadius}" r="${borderRadius}" fill="white"/>
-      </svg>`;
-      const borderCircle = await sharp(Buffer.from(borderSvg))
-        .png()
-        .toBuffer();
-
-      // Composite: background + white border ring + circular avatar
       bgBuffer = await sharp(bgBuffer)
         .composite([
           {
-            input: borderCircle,
-            left: centerX - Math.round(borderDiameter / 2),
-            top: centerY - Math.round(borderDiameter / 2),
-          },
-          {
-            input: circularAvatar,
-            left: centerX - radius,
-            top: centerY - radius,
+            input: Buffer.from(textSvg),
+            top: 0,
+            left: 0,
           },
         ])
         .jpeg({ quality: 90 })
         .toBuffer();
 
+      console.log(`[ImageGen] ✅ Card generated with name: "${friendName}" on bg ${bgIndex}`);
       return bgBuffer;
     } catch (err) {
-      console.log("[ImageGen] ℹ️ Profile pic unavailable (FB API restriction for non-admin users) — using background only");
+      console.warn("[ImageGen] ⚠️ Text overlay failed:", err.message);
     }
   }
 
