@@ -1,10 +1,9 @@
 // ==================================================
 // Dynamic Image Generator (Sharp + Vector Path Text Overlay)
 // ==================================================
-// Converts Thai text into SVG vector <path> shapes using
-// opentype.js so that Thai characters render 100% accurately
-// on any OS (Linux/Render/Mac) without relying on librsvg or
-// system font availability.
+// Converts Thai, English, and Khmer (Cambodian) text into
+// SVG vector <path> shapes using opentype.js so that characters
+// render 100% accurately on any OS (Linux/Render/Mac).
 // ==================================================
 
 const fs = require("fs");
@@ -23,28 +22,50 @@ const BG_IMAGES = {
 // In-memory cache for background image buffers
 const bgCache = new Map();
 
-// Opentype font object
-let parsedFont = null;
+// Opentype font objects
+let thaiFont = null;
+let khmerFont = null;
 
 /**
- * Load or download NotoSansThai font and parse with opentype.js
+ * Load and parse Thai & Khmer fonts.
  */
-function getParsedFont() {
-  if (parsedFont) return parsedFont;
+function getFonts() {
+  const assetsDir = path.join(__dirname, "..", "assets");
 
-  const fontPath = path.join(__dirname, "..", "assets", "NotoSansThai.ttf");
-  if (fs.existsSync(fontPath)) {
-    const fontBuffer = fs.readFileSync(fontPath);
-    parsedFont = opentype.parse(
-      fontBuffer.buffer.slice(
-        fontBuffer.byteOffset,
-        fontBuffer.byteOffset + fontBuffer.byteLength
-      )
-    );
-    console.log("[ImageGen] ✅ NotoSansThai font parsed with opentype.js");
-    return parsedFont;
+  if (!thaiFont) {
+    const thaiPath = path.join(assetsDir, "NotoSansThai.ttf");
+    if (fs.existsSync(thaiPath)) {
+      const buf = fs.readFileSync(thaiPath);
+      thaiFont = opentype.parse(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+    }
   }
-  return null;
+
+  if (!khmerFont) {
+    const khmerPath = path.join(assetsDir, "NotoSansKhmer.ttf");
+    if (fs.existsSync(khmerPath)) {
+      const buf = fs.readFileSync(khmerPath);
+      khmerFont = opentype.parse(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+    }
+  }
+
+  return { thaiFont, khmerFont };
+}
+
+/**
+ * Select appropriate font based on character set in text.
+ * @param {string} text 
+ * @returns {opentype.Font}
+ */
+function selectFontForText(text) {
+  const { thaiFont, khmerFont } = getFonts();
+
+  // Check if text contains Khmer characters (U+1780 - U+17FF, U+19E0 - U+19FF)
+  const containsKhmer = /[\u1780-\u17FF\u19E0-\u19FF]/.test(text || "");
+  if (containsKhmer && khmerFont) {
+    return khmerFont;
+  }
+
+  return thaiFont;
 }
 
 /**
@@ -108,7 +129,7 @@ async function getBgBuffer(bgIndex) {
  */
 async function generateCardImage(bgIndex, profilePicUrl, friendName = "Friend") {
   let bgBuffer = await getBgBuffer(bgIndex);
-  const font = getParsedFont();
+  const font = selectFontForText(friendName);
 
   // Get background dimensions
   const bgMeta = await sharp(bgBuffer).metadata();
@@ -134,7 +155,7 @@ async function generateCardImage(bgIndex, profilePicUrl, friendName = "Friend") 
       const textWidth = font.getAdvanceWidth(friendName, fontSize);
       const startX = Math.round((bgWidth - textWidth) / 2);
 
-      // Convert Thai text into SVG vector path data using opentype.js
+      // Convert text into SVG vector path data using opentype.js
       const textPath = font.getPath(
         friendName,
         startX,
@@ -155,10 +176,10 @@ async function generateCardImage(bgIndex, profilePicUrl, friendName = "Friend") 
           fill="rgba(0,0,0,0.55)" 
         />
         
-        <!-- Vector Path for Thai Text (Drop Shadow) -->
+        <!-- Vector Path for Text (Drop Shadow) -->
         <path d="${pathData}" fill="rgba(0,0,0,0.7)" transform="translate(2, 2)"/>
         
-        <!-- Vector Path for Thai Text (White Fill) -->
+        <!-- Vector Path for Text (White Fill) -->
         <path d="${pathData}" fill="#FFFFFF"/>
       </svg>`;
 
@@ -184,7 +205,7 @@ async function generateCardImage(bgIndex, profilePicUrl, friendName = "Friend") 
 }
 
 // Pre-warm font and cache on module load
-try { getParsedFont(); } catch (_e) {}
+try { getFonts(); } catch (_e) {}
 getBgBuffer(1).catch(() => {});
 getBgBuffer(4).catch(() => {});
 
